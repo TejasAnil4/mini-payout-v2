@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>WebSocket Test</title>
+</head>
+<body>
+  <h1>WebSocket Test Client</h1>
+  <p id="status">Connecting...</p>
+  <h3>Notifications:</h3>
+  <ul id="notifications"></ul>
+
+  <script src="http://localhost:5005/socket.io/socket.io.js"></script>
+  <script>
+    const token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6ImYwNDgzZWU0LTNiNmYtNGEyZS05M2FiLTI0ODA4Y2RlZDZkNyIsImVtYWlsIjoibmV5bWFyQHRlc3QuY29tIiwicm9sZSI6Ik1FUkNIQU5UIiwiaWF0IjoxNzg1NDA1MzQ0LCJleHAiOjE3ODYwMTAxNDR9.WhZIq2knXTNOlZGLgfmMlxQ0sCRZ_h0afjvg2IirpyM"
+    const socket = io("http://localhost:5005", {
+      auth: { token },
+    });
+
+    socket.on("connect", () => {
+      document.getElementById("status").textContent = "Connected! Socket ID: " + socket.id;
+    });
+
+    socket.on("connect_error", (err) => {
+      document.getElementById("status").textContent = "Connection rejected: " + err.message;
+    });
+
+    socket.on("disconnect", () => {
+      document.getElementById("status").textContent = "Disconnected.";
+    });
+
+    // Listen for the SPECIFIC event our server emits
+    socket.on("topup_approved", (data) => {
+      console.log("Notification received:", data);
+      const li = document.createElement("li");
+      li.textContent = `${data.message} (New balance: ₹${data.newBalance})`;
+      document.getElementById("notifications").appendChild(li);
+    });
+
+    socket.on("payout_completed", (data) => {
+  console.log("Notification received:", data);
+  const li = document.createElement("li");
+  li.textContent = data.message;
+  document.getElementById("notifications").appendChild(li);
+});
+  </script>
+</body>
+</html>

@@ -1,0 +1,204 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  MERCHANT
+  ADMIN
+}
+
+enum UserStatus {
+  ACTIVE
+  BLOCKED
+}
+
+enum WalletStatus {
+  ACTIVE
+  FROZEN
+}
+
+enum ChannelStatus {
+  PENDING
+  VERIFIED
+  REJECTED
+}
+
+enum TopUpStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum TransactionType {
+  WALLET_TOPUP
+  PAYOUT
+}
+
+enum TransactionStatus {
+  PENDING
+  SUCCESS
+  FAILED
+}
+
+enum BeneficiaryType {
+  BANK
+  INTERNAL_WALLET
+}
+
+enum BeneficiaryStatus {
+  PENDING
+  VERIFIED
+  REJECTED
+  BLOCKED
+}
+
+model User {
+  id          String     @id @default(uuid())
+  email       String     @unique
+  password    String
+  fullName    String
+  phoneNumber String     @unique
+  role        UserRole   @default(MERCHANT)
+  status      UserStatus @default(ACTIVE)
+
+  wallet      Wallet?
+
+  channels          Channel[] @relation("MerchantChannels")
+  selectedChannelId String?
+  selectedChannel   Channel?  @relation("SelectedChannel", fields: [selectedChannelId], references: [id])
+
+  topUpRequests TopUpRequest[]
+  transactions  Transaction[]
+
+  beneficiaries         Beneficiary[] @relation("MerchantBeneficiaries")
+  receivedAsBeneficiary Beneficiary[] @relation("LinkedBeneficiary")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Wallet {
+  id      String       @id @default(uuid())
+  userId  String       @unique
+  user    User         @relation(fields: [userId], references: [id])
+
+  balance Decimal      @default(0.00) @db.Decimal(18, 2)
+  status  WalletStatus @default(ACTIVE)
+  version Int          @default(0)
+
+  topUpRequests TopUpRequest[]
+  transactions  Transaction[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Channel {
+  id                String        @id @default(uuid())
+
+  userId            String
+  user              User          @relation("MerchantChannels", fields: [userId], references: [id])
+
+  selectedByUsers   User[]        @relation("SelectedChannel")
+
+  bankName          String
+  accountHolderName String
+  accountNumber     String
+  ifscCode          String
+
+  status            ChannelStatus @default(PENDING)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([ifscCode, accountNumber])
+  @@index([userId])
+  @@index([status])
+}
+
+model TopUpRequest {
+  id       String      @id @default(uuid())
+
+  userId   String
+  user     User        @relation(fields: [userId], references: [id])
+
+  walletId String
+  wallet   Wallet      @relation(fields: [walletId], references: [id])
+
+  amount   Decimal     @db.Decimal(18, 2)
+  status   TopUpStatus @default(PENDING)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@index([walletId])
+  @@index([status])
+  @@index([createdAt])
+  @@index([userId, status, createdAt])
+}
+
+model Transaction {
+  id              String            @id @default(uuid())
+  referenceId     String            @unique
+  idempotencyKey  String?           @unique
+
+  userId          String
+  user            User              @relation(fields: [userId], references: [id])
+
+  walletId        String
+  wallet          Wallet            @relation(fields: [walletId], references: [id])
+
+  transactionType TransactionType
+  amount          Decimal           @db.Decimal(18, 2)
+  fees            Decimal           @default(0.00) @db.Decimal(18, 2)
+  netAmount       Decimal           @db.Decimal(18, 2)
+
+  status          TransactionStatus @default(PENDING)
+
+  remarks         String?
+  failureReason   String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@index([walletId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model Beneficiary {
+  id String @id @default(uuid())
+
+  // Who owns this beneficiary
+  merchantId String
+  merchant   User   @relation("MerchantBeneficiaries", fields: [merchantId], references: [id])
+
+  type            BeneficiaryType
+  beneficiaryName String
+
+  // For BANK type
+  accountHolderName String?
+  accountNumber     String?
+  ifscCode          String?
+  bankName          String?
+
+  // For INTERNAL_WALLET type
+  linkedUserId String?
+  linkedUser   User?   @relation("LinkedBeneficiary", fields: [linkedUserId], references: [id])
+
+  status BeneficiaryStatus @default(PENDING)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([merchantId])
+  @@index([status])
+  @@index([createdAt])
+}
