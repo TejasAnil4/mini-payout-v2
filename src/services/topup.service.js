@@ -1,6 +1,7 @@
 const prisma = require("../config/db");
 const { BadRequestError, NotFoundError, ConflictError } = require("../utils/errors");
 const { notifyUser } = require("../utils/notify");
+const { deleteCache } = require("../utils/cache");
 
 // Merchant: create a top-up request
 const createTopUp = async (userId, data) => {
@@ -113,6 +114,8 @@ const approveTopUp = async (topupId) => {
 
     return { updatedWallet, updatedTopup, transaction };
   });
+
+  await deleteCache(`wallet:${topup.userId}`);
 
   notifyUser(topup.userId, "topup_approved", {
   message: `Your top-up of ₹${topup.amount} has been approved!`,

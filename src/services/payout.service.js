@@ -1,12 +1,17 @@
 const prisma = require("../config/db");
-const { BadRequestError, NotFoundError, ConflictError } = require("../utils/errors");
-const { payoutNotificationQueue } = require("../queues/payoutNotification.queue");
+const {
+  BadRequestError,
+  NotFoundError,
+  ConflictError,
+} = require("../utils/errors");
+const {
+  payoutNotificationQueue,
+} = require("../queues/payoutNotification.queue");
 const { notifyUser } = require("../utils/notify");
+const { deleteCache } = require("../utils/cache");
 
 const createPayout = async (merchantId, data) => {
   const { beneficiaryId, amount, idempotencyKey } = data;
-
-
 
   const payoutAmount = amount;
 
@@ -38,7 +43,9 @@ const createPayout = async (merchantId, data) => {
   });
 
   if (!beneficiary) {
-    throw new BadRequestError("Beneficiary not found, not yours, or not yet verified");
+    throw new BadRequestError(
+      "Beneficiary not found, not yours, or not yet verified",
+    );
   }
 
   if (beneficiary.type === "INTERNAL_WALLET") {
@@ -84,7 +91,9 @@ const createPayout = async (merchantId, data) => {
     });
 
     if (debitResult.count === 0) {
-      throw new ConflictError("Wallet was modified by another operation. Please retry.");
+      throw new ConflictError(
+        "Wallet was modified by another operation. Please retry.",
+      );
     }
 
     if (beneficiary.type === "INTERNAL_WALLET") {
@@ -115,16 +124,22 @@ const createPayout = async (merchantId, data) => {
     return transaction;
   });
 
+await deleteCache(`wallet:${merchantId}`);
+if (beneficiary.type === "INTERNAL_WALLET") {
+  await deleteCache(`wallet:${beneficiary.linkedUser.id}`);
+}
   await payoutNotificationQueue.add("send-payout-notification", {
-  transactionId: result.id,
-  merchantId,
-  amount: payoutAmount,
-});
+    transactionId: result.id,
+    merchantId,
+    amount: payoutAmount,
+  });
 
-notifyUser(merchantId, "payout_completed", {
-  message: `Your payout of ₹${payoutAmount} to ${beneficiary.beneficiaryName} was successful!`,
-  transactionId: result.id,
-});
+
+  notifyUser(merchantId, "payout_completed", {
+    message: `Your payout of ₹${payoutAmount} to ${beneficiary.beneficiaryName} was successful!`,
+    transactionId: result.id,
+  });
+
 
   return result;
 };
