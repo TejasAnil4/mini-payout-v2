@@ -156,7 +156,7 @@ const getMyPayouts = async (merchantId) => {
 };
 
 const getAllPayouts = async (filters) => {
-  const { status, userId, fromDate, toDate } = filters;
+  const { status, userId, fromDate, toDate, cursor, limit } = filters;
 
   const where = { transactionType: "PAYOUT" };
   if (status) where.status = status;
@@ -168,6 +168,8 @@ const getAllPayouts = async (filters) => {
     if (toDate) where.createdAt.lte = new Date(toDate);
   }
 
+  const pageSize = limit ? Number(limit) : 20;
+
   const payouts = await prisma.transaction.findMany({
     where,
     include: {
@@ -176,9 +178,21 @@ const getAllPayouts = async (filters) => {
       },
     },
     orderBy: { createdAt: "desc" },
+    take: pageSize + 1,
+    skip: cursor ? 1 : 0,
+    cursor: cursor ? { id: cursor } : undefined,
   });
 
-  return payouts;
+  let nextCursor = null;
+  if (payouts.length > pageSize) {
+    const nextItem = payouts.pop();
+    nextCursor = nextItem.id;
+  }
+
+  return {
+    data: payouts,
+    nextCursor,
+  };
 };
 
 module.exports = {

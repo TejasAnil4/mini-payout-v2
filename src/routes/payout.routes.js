@@ -121,6 +121,6 @@ router.get("/my", protect, authorize("MERCHANT"), payoutController.getMyPayouts)
  *       403:
  *         description: Not an admin
  */
-router.get("/all", protect, authorize("ADMIN"), payoutController.getAllPayouts);
+router.get("/all", protect, authorize("MERCHANT"), payoutController.getAllPayouts);
 
 module.exports = router;

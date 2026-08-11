@@ -27,12 +27,15 @@ const getAllPayouts = asyncHandler(async (req, res) => {
     userId: req.query.userId,
     fromDate: req.query.fromDate,
     toDate: req.query.toDate,
+    cursor: req.query.cursor,
+    limit: req.query.limit
   };
-  const payouts = await payoutService.getAllPayouts(filters);
+  const result = await payoutService.getAllPayouts(filters);
   res.status(200).json({
     success: true,
     message: "All payouts fetched",
-    data: payouts,
+    data: result.data,
+    nextCursor: result.nextCursor,
   });
 });
 
