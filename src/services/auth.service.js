@@ -2,6 +2,7 @@ const prisma = require('../config/db');
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
 const { UnauthorizedError, ConflictError } = require("../utils/errors");
+const { logAction } = require("../utils/auditLog");
 
 const register = async (data) => {
   const { email, password, fullName, phoneNumber } = data;
@@ -36,6 +37,14 @@ const register = async (data) => {
     return newUser;
   });
 
+  await logAction({
+    userId: user.id,
+    action: "USER_REGISTERED",
+    entityType: "User",
+    entityId: user.id,
+    metadata: { email: user.email, role: user.role },
+  });
+
   return {
     id: user.id,
     email: user.email,
@@ -50,12 +59,26 @@ const login = async (data) => {
   const user = await prisma.user.findUnique({ where: { email } });
 
   if (!user) {
+    await logAction({
+      userId: null,
+      action: "LOGIN_FAILED",
+      entityType: "User",
+      entityId: null,
+      metadata: { email, reason: "user_not_found" },
+    });
     throw new UnauthorizedError("Invalid email or password");
   }
 
   const isValid = await bcrypt.compare(password, user.password);
 
   if (!isValid) {
+    await logAction({
+      userId: user.id,
+      action: "LOGIN_FAILED",
+      entityType: "User",
+      entityId: user.id,
+      metadata: { email, reason: "wrong_password" },
+    });
     throw new UnauthorizedError("Invalid email or password");
   }
 
@@ -64,6 +87,14 @@ const login = async (data) => {
     process.env.JWT_SECRET,
     { expiresIn: "7d" }
   );
+  
+  await logAction({
+    userId: user.id,
+    action: "LOGIN_SUCCESS",
+    entityType: "User",
+    entityId: user.id,
+    metadata: { email: user.email },
+  });
 
   return {
     token,

@@ -1,4 +1,5 @@
 const prisma = require("../config/db");
+const { logAction } = require("../utils/auditLog");
 const { BadRequestError, NotFoundError, ConflictError } = require("../utils/errors");
 
 const addBeneficiary = async (merchantId, data) => {
@@ -51,6 +52,14 @@ const addBeneficiary = async (merchantId, data) => {
     data: createData,
   });
 
+  await logAction({
+  userId: merchantId,
+  action: "BENEFICIARY_ADDED",
+  entityType: "Beneficiary",
+  entityId: beneficiary.id,
+  metadata: { type: beneficiary.type, beneficiaryName: beneficiary.beneficiaryName },
+});
+
   return beneficiary;
 };
 
@@ -85,7 +94,7 @@ const getPendingBeneficiaries = async () => {
   return beneficiaries;
 };
 
-const verifyBeneficiary = async (beneficiaryId) => {
+const verifyBeneficiary = async (beneficiaryId, adminId) => {
   const beneficiary = await prisma.beneficiary.findUnique({
     where: { id: beneficiaryId },
   });
@@ -93,7 +102,7 @@ const verifyBeneficiary = async (beneficiaryId) => {
   if (!beneficiary) throw new NotFoundError("Beneficiary not found");
 
   if (beneficiary.status !== "PENDING") {
-    throw new ConflictError(`Beneficiary is already ${beneficiary.status.toLowerCase()}`);
+    throw new ConflictError(`Beneficiary is ${beneficiary.status.toLowerCase()}`);
   }
 
   const updated = await prisma.beneficiary.update({
@@ -101,10 +110,18 @@ const verifyBeneficiary = async (beneficiaryId) => {
     data: { status: "VERIFIED" },
   });
 
+  await logAction({
+    userId: adminId,
+    action: "BENEFICIARY_VERIFIED",
+    entityType: "Beneficiary",
+    entityId: beneficiaryId,
+    metadata: { beneficiaryName: updated.beneficiaryName },
+  });
+
   return updated;
 };
 
-const blockBeneficiary = async (beneficiaryId) => {
+const blockBeneficiary = async (beneficiaryId, adminId) => {
   const beneficiary = await prisma.beneficiary.findUnique({
     where: { id: beneficiaryId },
   });
@@ -118,6 +135,14 @@ const blockBeneficiary = async (beneficiaryId) => {
   const updated = await prisma.beneficiary.update({
     where: { id: beneficiaryId },
     data: { status: "BLOCKED" },
+  });
+
+   await logAction({
+    userId: adminId,
+    action: "BENEFICIARY_BLOCKED",
+    entityType: "Beneficiary",
+    entityId: beneficiaryId,
+    metadata: { beneficiaryName: updated.beneficiaryName },
   });
 
   return updated;

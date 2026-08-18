@@ -9,6 +9,7 @@ const {
 } = require("../queues/payoutNotification.queue");
 const { notifyUser } = require("../utils/notify");
 const { deleteCache } = require("../utils/cache");
+const { logAction } = require("../utils/auditLog");
 
 const createPayout = async (merchantId, data) => {
   const { beneficiaryId, amount, idempotencyKey } = data;
@@ -133,6 +134,18 @@ if (beneficiary.type === "INTERNAL_WALLET") {
     merchantId,
     amount: payoutAmount,
   });
+
+  await logAction({
+  userId: merchantId,
+  action: "PAYOUT_COMPLETED",
+  entityType: "Transaction",
+  entityId: result.id,
+  metadata: {
+    amount: payoutAmount,
+    beneficiaryName: beneficiary.beneficiaryName,
+    beneficiaryType: beneficiary.type,
+  },
+});
 
 
   notifyUser(merchantId, "payout_completed", {

@@ -1,5 +1,6 @@
 const prisma = require("../config/db");
 const { ConflictError, NotFoundError, BadRequestError } = require("../utils/errors");
+const { logAction } = require("../utils/auditLog");
 
 // Merchant adds a new channel
 const addChannel = async (userId, data) => {
@@ -22,6 +23,14 @@ const addChannel = async (userId, data) => {
       ifscCode,
     },
   });
+
+  await logAction({
+  userId,
+  action: "CHANNEL_ADDED",
+  entityType: "Channel",
+  entityId: channel.id,
+  metadata: { bankName: channel.bankName, accountNumber: channel.accountNumber },
+});
 
   return channel;
 };
@@ -77,10 +86,8 @@ const getPendingChannels = async () => {
 };
 
 // Admin verifies a pending channel
-const verifyChannel = async (channelId) => {
-  const channel = await prisma.channel.findUnique({
-    where: { id: channelId },
-  });
+const verifyChannel = async (channelId, adminId) => {
+  const channel = await prisma.channel.findUnique({ where: { id: channelId } });
 
   if (!channel) {
     throw new NotFoundError("Channel not found");
@@ -93,6 +100,14 @@ const verifyChannel = async (channelId) => {
   const updated = await prisma.channel.update({
     where: { id: channelId },
     data: { status: "VERIFIED" },
+  });
+
+  await logAction({
+    userId: adminId,
+    action: "CHANNEL_VERIFIED",
+    entityType: "Channel",
+    entityId: channelId,
+    metadata: { bankName: updated.bankName },
   });
 
   return updated;

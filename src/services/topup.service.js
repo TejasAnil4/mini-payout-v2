@@ -2,6 +2,7 @@ const prisma = require("../config/db");
 const { BadRequestError, NotFoundError, ConflictError } = require("../utils/errors");
 const { notifyUser } = require("../utils/notify");
 const { deleteCache } = require("../utils/cache");
+const { logAction } = require("../utils/auditLog");
 
 // Merchant: create a top-up request
 const createTopUp = async (userId, data) => {
@@ -39,6 +40,14 @@ const createTopUp = async (userId, data) => {
     },
   });
 
+  await logAction({
+  userId,
+  action: "TOPUP_REQUESTED",
+  entityType: "TopUpRequest",
+  entityId: topup.id,
+  metadata: { amount: topup.amount },
+});
+
   return topup;
 };
 
@@ -66,7 +75,7 @@ const getPendingTopUps = async () => {
 };
 
 // Admin: approve a top-up
-const approveTopUp = async (topupId) => {
+const approveTopUp = async (topupId,approverId = null) => {
   const topup = await prisma.topUpRequest.findUnique({
     where: { id: topupId },
     include: { wallet: true },
@@ -117,7 +126,19 @@ const approveTopUp = async (topupId) => {
 
   await deleteCache(`wallet:${topup.userId}`);
 
-  notifyUser(topup.userId, "topup_approved", {
+  await logAction({
+    userId: approverId,   // null if triggered by webhook, admin's id if manual
+    action: "TOPUP_APPROVED",
+    entityType: "TopUpRequest",
+    entityId: topupId,
+    metadata: {
+      amount: topup.amount,
+      approvedBy: approverId ? "admin" : "webhook",
+    },
+  });
+
+  notifyUser(topup.userId, "topup_approved",
+     {
   message: `Your top-up of ₹${topup.amount} has been approved!`,
   transactionId: result.transaction.id,
   newBalance: result.updatedWallet.balance,

@@ -43,7 +43,7 @@ const getPendingChannels = asyncHandler(async (req, res) => {
 
 const verifyChannel = asyncHandler(async (req, res) => {
   const channelId = req.params.id;
-  const channel = await channelService.verifyChannel(channelId);
+  const channel = await channelService.verifyChannel(channelId, req.user.id);
   res.status(200).json({
     success: true,
     message: "Channel verified",

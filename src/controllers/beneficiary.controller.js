@@ -32,7 +32,8 @@ const getPendingBeneficiaries = asyncHandler(async (req, res) => {
 
 const verifyBeneficiary = asyncHandler(async (req, res) => {
   const beneficiaryId = req.params.id;
-  const result = await beneficiaryService.verifyBeneficiary(beneficiaryId);
+  const adminId = req.user.id;
+  const result = await beneficiaryService.verifyBeneficiary(beneficiaryId, adminId);
   res.status(200).json({
     success: true,
     message: "Beneficiary verified",
@@ -42,7 +43,8 @@ const verifyBeneficiary = asyncHandler(async (req, res) => {
 
 const blockBeneficiary = asyncHandler(async (req, res) => {
   const beneficiaryId = req.params.id;
-  const result = await beneficiaryService.blockBeneficiary(beneficiaryId);
+  const adminId = req.user.id;
+  const result = await beneficiaryService.blockBeneficiary(beneficiaryId, adminId);
   res.status(200).json({
     success: true,
     message: "Beneficiary blocked",

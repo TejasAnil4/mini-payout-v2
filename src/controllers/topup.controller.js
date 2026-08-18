@@ -32,7 +32,8 @@ const getPendingTopUps = asyncHandler(async (req, res) => {
 
 const approveTopUp = asyncHandler(async (req, res) => {
   const topupId = req.params.id;
-  const result = await topupService.approveTopUp(topupId);
+  const adminId = req.user.id;
+  const result = await topupService.approveTopUp(topupId, adminId);
   res.status(200).json({
     success: true,
     message: "Top-up approved successfully",
