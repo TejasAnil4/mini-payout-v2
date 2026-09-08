@@ -156,6 +156,9 @@ model Transaction {
   walletId        String
   wallet          Wallet            @relation(fields: [walletId], references: [id])
 
+  beneficiaryId   String?
+  beneficiary     Beneficiary?      @relation(fields: [beneficiaryId], references: [id])
+
   transactionType TransactionType
   amount          Decimal           @db.Decimal(18, 2)
   fees            Decimal           @default(0.00) @db.Decimal(18, 2)
@@ -171,6 +174,7 @@ model Transaction {
 
   @@index([userId])
   @@index([walletId])
+  @@index([beneficiaryId])
   @@index([status])
   @@index([createdAt])
 }
@@ -178,24 +182,23 @@ model Transaction {
 model Beneficiary {
   id String @id @default(uuid())
 
-  // Who owns this beneficiary
   merchantId String
   merchant   User   @relation("MerchantBeneficiaries", fields: [merchantId], references: [id])
 
   type            BeneficiaryType
   beneficiaryName String
 
-  // For BANK type
   accountHolderName String?
   accountNumber     String?
   ifscCode          String?
   bankName          String?
 
-  // For INTERNAL_WALLET type
   linkedUserId String?
   linkedUser   User?   @relation("LinkedBeneficiary", fields: [linkedUserId], references: [id])
 
   status BeneficiaryStatus @default(PENDING)
+
+  transactions Transaction[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -203,6 +206,8 @@ model Beneficiary {
   @@index([merchantId])
   @@index([status])
   @@index([createdAt])
+  @@unique([merchantId, accountNumber, ifscCode])
+  @@unique([merchantId, linkedUserId])
 }
 
 model AuditLog {
