@@ -1,5 +1,14 @@
 # Payout — Merchant Payout & Collection Backend
 
+[![Node.js](https://img.shields.io/badge/Node.js-20-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
+[![Express](https://img.shields.io/badge/Express-000000?logo=express&logoColor=white)](https://expressjs.com/)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-4169E1?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
+[![Prisma](https://img.shields.io/badge/Prisma-2D3748?logo=prisma&logoColor=white)](https://www.prisma.io/)
+[![Redis](https://img.shields.io/badge/Redis-DC382D?logo=redis&logoColor=white)](https://redis.io/)
+[![Docker](https://img.shields.io/badge/Docker-2496ED?logo=docker&logoColor=white)](https://hub.docker.com/r/tejas69/mini-payout-app/tags)
+[![Deployed on Railway](https://img.shields.io/badge/Deployed-Railway-0B0D0E?logo=railway&logoColor=white)](https://mini-payout-v2-production.up.railway.app)
+[![GraphQL](https://img.shields.io/badge/GraphQL-E10098?logo=graphql&logoColor=white)](https://graphql.org/)
+
 A production-style payment processing backend built from scratch — merchant wallets, bank channel onboarding, topups, payouts, and beneficiary management — implementing the concurrency, security, and reliability patterns used in real fintech systems.
 
 **Live API:** [mini-payout-v2-production.up.railway.app](https://mini-payout-v2-production.up.railway.app)
