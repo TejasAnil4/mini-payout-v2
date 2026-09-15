@@ -13,15 +13,30 @@ const topupRoutes = require("./src/routes/topup.routes");
 const beneficiaryRoutes = require("./src/routes/beneficiary.routes");
 const payoutRoutes = require("./src/routes/payout.routes");
 const webhookRoutes = require("./src/routes/webhook.routes");
+const { graphqlHTTP } = require("express-graphql");
 
 const app = express();
 const { generalLimiter, authLimiter } = require("./src/middlewares/rateLimit.middleware");
+const schema = require("./src/graphql/schema");
+const root = require("./src/graphql/resolvers");
+const { protect } = require("./src/middlewares/auth.middleware");
 
 app.use(cors());
 app.use(express.json());
 app.use(generalLimiter);
 
 app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
+
+app.use(
+  "/graphql",
+  protect,
+  graphqlHTTP((req) => ({
+    schema,
+    rootValue: root,
+    graphiql: true,
+    context: { user: req.user },
+  }))
+);
 
 app.get("/", (req, res) => {
   res.json({ success: true, message: "Mini Payout v2 API running" });

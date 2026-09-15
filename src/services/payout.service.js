@@ -198,8 +198,8 @@ const getAllPayouts = async (filters) => {
 
   let nextCursor = null;
   if (payouts.length > pageSize) {
-    const nextItem = payouts.pop();
-    nextCursor = nextItem.id;
+    payouts.pop();
+    nextCursor = payouts[payouts.length - 1].id;
   }
 
   return {

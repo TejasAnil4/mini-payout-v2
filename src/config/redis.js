@@ -3,7 +3,15 @@ const IORedis = require("ioredis");
 const connection = new IORedis({
   host: process.env.REDIS_HOST || "127.0.0.1",
   port: process.env.REDIS_PORT || 6379,
-  maxRetriesPerRequest: null,   // required by BullMQ
+  maxRetriesPerRequest: null,
+});
+
+connection.on("connect", () => {
+  console.log("[Redis] Connected successfully");
+});
+
+connection.on("error", (err) => {
+  console.error("[Redis] Connection error:", err.message);
 });
 
 module.exports = connection;
