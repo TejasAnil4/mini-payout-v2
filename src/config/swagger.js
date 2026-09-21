@@ -12,12 +12,16 @@ const options = {
         name: "Backend Team",
       },
     },
-    servers: [
-      {
-        url: "http://localhost:5005",
-        description: "Local dev",
-      },
-    ],
+servers: [
+  {
+    url: "https://mini-payout-v2-production.up.railway.app",
+    description: "Live — Railway (use this for testing)",
+  },
+  {
+    url: "http://localhost:5005",
+    description: "Local dev",
+  },
+],
     components: {
       securitySchemes: {
         bearerAuth: {
