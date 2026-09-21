@@ -9,96 +9,133 @@
 [![Deployed on Railway](https://img.shields.io/badge/Deployed-Railway-0B0D0E?logo=railway&logoColor=white)](https://mini-payout-v2-production.up.railway.app)
 [![GraphQL](https://img.shields.io/badge/GraphQL-E10098?logo=graphql&logoColor=white)](https://graphql.org/)
 
-A production-style payment processing backend built from scratch — merchant wallets, bank channel onboarding, topups, payouts, and beneficiary management — implementing the concurrency, security, and reliability patterns used in real fintech systems.
+A production-grade merchant payout and collection backend implementing real fintech engineering patterns — optimistic concurrency control, idempotency, HMAC-signed webhooks, Redis-backed async job pipelines, WebSocket notifications, and a fully containerized multi-service deployment.
 
-**Live API:** [mini-payout-v2-production.up.railway.app](https://mini-payout-v2-production.up.railway.app)
-**Docker Image:** [hub.docker.com/r/tejas69/mini-payout-app](https://hub.docker.com/r/tejas69/mini-payout-app/tags)
+**Live API:** [mini-payout-v2-production.up.railway.app](https://mini-payout-v2-production.up.railway.app)  
+**Swagger Docs:** [mini-payout-v2-production.up.railway.app/api-docs](https://mini-payout-v2-production.up.railway.app/api-docs)  
+**Docker Hub:** [hub.docker.com/r/tejas69/mini-payout-app](https://hub.docker.com/r/tejas69/mini-payout-app/tags)
 
 ---
 
 ## Table of Contents
 
-- [Overview](#overview)
 - [Architecture](#architecture)
+- [Request Flow](#request-flow)
 - [Core Engineering Decisions](#core-engineering-decisions)
 - [Tech Stack](#tech-stack)
 - [Features](#features)
-- [Project Structure](#project-structure)
-- [Getting Started](#getting-started)
-  - [Local Setup](#local-setup)
-  - [Docker Setup](#docker-setup)
+- [Quick Run — No Code Needed](#quick-run--no-code-needed)
+- [Local Development Setup](#local-development-setup)
 - [Environment Variables](#environment-variables)
 - [API Documentation](#api-documentation)
 - [Testing](#testing)
 - [Deployment](#deployment)
-- [Roadmap](#roadmap)
-
----
-
-## Overview
-
-Payout models a merchant-facing payments platform end to end:
-
-- Merchants register, add and verify bank **channels**, and hold a **wallet**.
-- Merchants **top up** their wallet from a verified channel; an admin (or an automated, signature-verified bank webhook) approves the transfer.
-- Merchants add **beneficiaries** (external bank accounts or other merchants' internal wallets), which an admin verifies.
-- Merchants **pay out** from their wallet to a verified beneficiary, with the same atomicity and concurrency guarantees a real ledger requires.
-
-Every state-changing action is audit-logged, every financial write is atomic and concurrency-safe, and the full stack — API, background worker, database, and cache — is containerized and deployed as independent services.
 
 ---
 
 ## Architecture
 
 ```
-                              ┌──────────────────────┐
-                              │        Client         │
-                              │  (Swagger / Postman /  │
-                              │     Web / Mobile)      │
-                              └──────────┬─────────────┘
-                                         │  HTTPS (REST + GraphQL + WebSocket)
-                     ┌───────────────────┼────────────────────┐
-                     │                   │                    │
-             ┌───────▼───────┐   ┌───────▼────────┐   ┌───────▼────────┐
-             │   Express API   │   │   Socket.IO     │   │  GraphQL (/graphql) │
-             │  (routes →      │   │  (JWT-auth'd,    │   │  schema + resolvers │
-             │  controllers →  │   │  real-time push) │   │  reuse REST services │
-             │  services)      │   └───────┬────────┘   └───────┬────────┘
-             └───────┬────────┘            │                     │
-                     │                     └──────────┬──────────┘
-                     │                                │
-        ┌────────────┼───────────────┬────────────────┤
-        │             │                │                │
-┌───────▼──────┐ ┌────▼─────┐  ┌───────▼───────┐ ┌──────▼───────┐
-│  PostgreSQL   │ │  Redis    │  │   BullMQ       │ │  Bank Webhook │
-│  (Prisma ORM) │ │  (cache + │  │   Worker       │ │  (HMAC-signed │
-│  wallets,      │ │  job queue)│  │  (background   │ │  auto-approval)│
-│  transactions, │ └───────────┘  │  notifications) │ └───────────────┘
-│  audit log     │                └────────────────┘
-└────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│                         CLIENT                                   │
+│              (Swagger UI / Postman / Web / Mobile)               │
+└───────────────────────────┬─────────────────────────────────────┘
+                            │ HTTPS
+┌───────────────────────────▼─────────────────────────────────────┐
+│                      EXPRESS API (port 5005)                      │
+│  Routes → Middleware (JWT auth, Zod validation, rate limiting)    │
+│         → Controllers → Services → Prisma → PostgreSQL            │
+└──────┬──────────────────┬──────────────────────┬────────────────┘
+       │                  │                       │
+┌──────▼──────┐  ┌────────▼────────┐  ┌──────────▼──────────────┐
+│  PostgreSQL  │  │     Redis        │  │   Socket.IO (WS)         │
+│  (Prisma)   │  │  Cache + Queue   │  │  JWT-authenticated       │
+│  Wallets     │  │  BullMQ jobs     │  │  Real-time push          │
+│  Transactions│  │  30s TTL cache   │  │  on tx completion        │
+└─────────────┘  └────────┬────────┘  └─────────────────────────┘
+                          │
+              ┌───────────▼──────────┐
+              │   BullMQ Worker       │
+              │   (separate process)  │
+              │   Payout notifications│
+              │   Retry + backoff     │
+              └──────────────────────┘
 ```
 
-**Request flow:** `Route → Middleware (auth, validation, rate limit) → Controller → Service → Prisma → PostgreSQL`
+---
 
-**Side-effect flow (always *after* the core write commits):** cache invalidation → background job enqueue → WebSocket push → audit log entry. A failure in any of these never rolls back or blocks a completed financial transaction.
+## Request Flow
+
+The complete lifecycle of a payout request — from merchant API call to real-time notification:
+
+```
+1. MERCHANT REQUEST
+   POST /api/v1/payout
+   Authorization: Bearer <JWT>
+   Body: { beneficiaryId, amount, idempotencyKey }
+         │
+         ▼
+2. MIDDLEWARE CHAIN
+   ├── JWT verification (protect middleware)
+   ├── Role check (MERCHANT only)
+   ├── Zod schema validation
+   └── Rate limiter (10 req/min per IP)
+         │
+         ▼
+3. IDEMPOTENCY CHECK
+   Does a transaction with this idempotencyKey already exist?
+   ├── YES → return cached result (no duplicate charge)
+   └── NO  → continue
+         │
+         ▼
+4. OPTIMISTIC CONCURRENCY CONTROL
+   UPDATE Wallet
+   SET balance = balance - amount, version = version + 1
+   WHERE id = ? AND version = currentVersion
+   ├── 0 rows updated → ConflictError 409 (concurrent write detected)
+   └── 1 row updated → continue
+         │
+         ▼
+5. ATOMIC DB TRANSACTION (Prisma $transaction)
+   ├── Wallet debit committed
+   ├── Transaction record created (status: SUCCESS)
+   └── Recipient wallet credited (if INTERNAL_WALLET type)
+         │
+         ▼
+6. POST-TRANSACTION SIDE EFFECTS (after commit)
+   ├── Redis cache invalidated (wallet:userId key deleted)
+   ├── BullMQ job enqueued (payout notification)
+   └── Audit log written
+         │
+         ▼
+7. BACKGROUND WORKER (separate process)
+   ├── Picks up BullMQ job from Redis queue
+   ├── Processes notification
+   ├── On failure: exponential backoff retry (up to 3 attempts)
+   └── WebSocket push → merchant's connected browser
+         │
+         ▼
+8. REAL-TIME NOTIFICATION
+   Socket.IO emits to merchant's authenticated WebSocket connection
+   { event: "payout_completed", transactionId, amount }
+```
 
 ---
 
 ## Core Engineering Decisions
 
-These are the decisions worth understanding, not just the features:
-
 | Decision | Why |
 |---|---|
-| **Optimistic concurrency control** on `Wallet.version`, not row-level locks | Payout writes to a single wallet are low-contention; a conditional `UPDATE ... WHERE version = X` costs nothing when there's no conflict and fails fast (409, client retries) when there is — cheaper than blocking writers under the common case |
-| **Idempotency keys** on `Transaction`, checked before any write | Protects against duplicate payouts from client retries or network blips — a repeated request with the same key returns the original result instead of double-debiting |
-| **HMAC-SHA256 signed webhooks** for bank confirmation | The webhook endpoint has no user session — authenticity is proven by recomputing the signature server-side with a shared secret, not by trusting the caller |
-| **Cache-aside with write-path invalidation** (Redis) | Wallet reads are cached with a short TTL as a safety net, but every write that changes a balance actively deletes the cache key — never serves stale financial data |
-| **Cursor-based (keyset) pagination**, not offset | `OFFSET` degrades on large tables and can skip/duplicate rows under concurrent writes; cursoring on `id` avoids both |
-| **Async job pipeline decoupled from the request/response cycle** (BullMQ + Redis) | Non-critical side effects (notification delivery) never block or risk the transactional write that already succeeded; failures retry with exponential backoff independently |
-| **Append-only audit log**, separate from business tables | Every state-changing action — including which actor performed it (admin vs. automated webhook) — is recorded permanently for traceability, independent of the current state of the row it describes |
-| **Compound unique constraints** at the database layer | Duplicate beneficiaries (same account, or same linked internal wallet) are rejected by Postgres itself, not just application-level checks — the database is the source of truth for data integrity |
-| **`onDelete: Restrict`** on `Transaction → Beneficiary` | A beneficiary that has ever received a payout cannot be deleted — the historical financial record is protected at the schema level |
+| **Optimistic concurrency control** on `Wallet.version` | Low write contention on individual wallets — fail-fast conditional update cheaper than blocking row lock. Retryable 409 vs deadlock risk |
+| **Idempotency keys** on `Transaction` | Protects against duplicate payouts from client retries or network blips — same key always returns original result |
+| **HMAC-SHA256 webhook verification** | No user session on the webhook endpoint — authenticity proven by recomputing signature server-side with shared secret |
+| **Cache-aside with write-path invalidation** | Wallet reads cached 30s in Redis; every write actively deletes the cache key — never serves stale financial data |
+| **Cursor-based keyset pagination** | `OFFSET` degrades on large tables and skips rows under concurrent writes; cursoring on `id` avoids both |
+| **BullMQ decoupled from request path** | Non-critical side effects (notifications) never block or risk the transaction that already succeeded |
+| **Append-only audit log** | Every state-changing action recorded permanently — separate from business tables, survives row updates |
+| **Compound unique constraints** on `Beneficiary` | Duplicate bank account / internal wallet prevention enforced at DB layer, not just application code |
+| **`onDelete: Restrict`** on `Transaction → Beneficiary` | Historical payout records protected — a beneficiary that received money cannot be deleted |
+| **Separate worker process** | BullMQ worker runs independently — main API process never blocks on notification delivery |
 
 ---
 
@@ -106,128 +143,210 @@ These are the decisions worth understanding, not just the features:
 
 | Layer | Technology |
 |---|---|
-| Runtime / Framework | Node.js, Express |
-| Database / ORM | PostgreSQL, Prisma |
-| Caching / Queue | Redis, BullMQ |
+| Runtime / Framework | Node.js 20, Express |
+| Database / ORM | PostgreSQL 16, Prisma 6 |
+| Caching / Queue | Redis 7, BullMQ |
 | Real-time | Socket.IO (JWT-authenticated WebSockets) |
-| API Layer | REST, GraphQL (`graphql`, `express-graphql`) |
+| API | REST + GraphQL (`graphql`, `express-graphql`) |
 | Validation | Zod |
 | Auth | JWT, bcrypt |
-| Docs | Swagger / OpenAPI (`swagger-jsdoc`, `swagger-ui-express`) |
+| Docs | Swagger / OpenAPI |
 | Testing | Vitest, Supertest |
 | Containerization | Docker, Docker Compose |
-| Deployment | Railway (multi-service: API, worker, managed Postgres, managed Redis) |
+| Deployment | Railway (API + worker + managed Postgres + Redis) |
 | Registry | Docker Hub |
 
 ---
 
 ## Features
 
-**Core Payments**
-- Merchant registration with auto-created wallet
+**Core Payment Flows**
+- Merchant registration with auto-created wallet (atomic)
 - Bank channel onboarding with admin verification and selection
-- Wallet top-up requests with admin or automated approval
-- Beneficiary management (bank accounts + internal wallet transfers) with verification and blocking
-- Payouts with atomic wallet debits, optimistic locking, and idempotency
+- Wallet top-up with admin or automated bank webhook approval
+- Beneficiary management (bank accounts + internal wallet transfers)
+- Payouts with atomic wallet debits, optimistic locking, idempotency
 
 **Reliability & Security**
-- HMAC-signed webhook endpoint simulating automated bank transfer confirmation
-- Centralized error handling with typed error classes
-- Rate limiting (general + stricter auth-route limits)
-- Zod schema validation on every mutating endpoint
-- Compound unique constraints and foreign-key integrity at the database layer
+- HMAC-SHA256 signed webhook endpoint simulating bank transfer confirmation
+- Centralized error handling with typed error classes (400/401/403/404/409)
+- Rate limiting (stricter on auth routes)
+- Zod schema validation on all mutating endpoints
+- Compound unique constraints and FK integrity at database layer
 
 **Async & Real-Time**
-- Redis-backed BullMQ queue for payout notifications, with automatic retry and exponential backoff
-- JWT-authenticated WebSocket channel pushing live updates on topup approval and payout completion
+- Redis-backed BullMQ queue for payout notifications
+- Automatic retry with exponential backoff (3 attempts)
+- JWT-authenticated WebSocket channel for real-time transaction updates
 
 **Performance & Observability**
-- Cache-aside Redis caching on wallet reads, invalidated on every write
-- Cursor-based (keyset) pagination on large result sets
-- Compound and single-column indexes, validated with `EXPLAIN ANALYZE`
-- Append-only audit log covering 11 distinct actions across every module
+- Cache-aside Redis caching on wallet reads, invalidated on writes
+- Cursor-based keyset pagination on all admin list endpoints
+- Compound indexing validated with EXPLAIN ANALYZE
+- Append-only audit log (11 action types, every module)
 
-**Delivery**
-- Full Swagger/OpenAPI documentation
-- Integration tests against an isolated test database
-- Multi-service Docker Compose setup (API, worker, Postgres, Redis)
-- Published application image on Docker Hub
-- Live multi-service deployment on Railway
-
----
-
-## Project Structure
-
-```
-mini-payout-v2/
-├── prisma/
-│   ├── schema.prisma          # User, Wallet, Channel, TopUpRequest, Transaction, Beneficiary, AuditLog
-│   ├── migrations/
-│   └── seed.js
-├── src/
-│   ├── config/                 # db, redis, swagger singletons
-│   ├── controllers/             # HTTP layer — request in, response out
-│   ├── services/                 # business logic, all Prisma queries
-│   ├── routes/                    # Express routers per resource
-│   ├── middlewares/                # auth, validation, rate limiting, error handling, webhook signature
-│   ├── validators/                  # Zod schemas
-│   ├── queues/                       # BullMQ queue definitions
-│   ├── workers/                       # BullMQ worker processes
-│   ├── graphql/                        # schema + resolvers (reuse REST services)
-│   ├── utils/                           # errors, cache helpers, audit log, notify (WebSocket)
-│   └── lib/                              # hashing, JWT helpers
-├── tests/                                 # Vitest + Supertest integration tests
-├── scripts/                                # bank webhook simulation script
-├── test-client/                             # standalone WebSocket test page
-├── Dockerfile
-├── docker-compose.yml                        # app + worker + postgres + redis
-└── app.js / server.js
-```
+**GraphQL**
+- `/graphql` endpoint alongside REST
+- `myWallet` query — returns authenticated merchant's wallet
+- `myTransactions(type)` query — filterable by PAYOUT or WALLET_TOPUP
+- Reuses existing REST service layer — no duplicate business logic
 
 ---
 
-## Getting Started
+## Quick Run — No Code Needed
 
-### Local Setup
+Run the entire stack (API + worker + PostgreSQL + Redis) with just Docker Desktop and two files.
 
-**Prerequisites:** Node.js 20+, PostgreSQL, Redis
+### Prerequisites
+
+- [Docker Desktop](https://www.docker.com/products/docker-desktop) installed and running
+
+### Step 1 — Create a folder
+
+```bash
+mkdir mini-payout && cd mini-payout
+```
+
+### Step 2 — Create a `docker-compose.yml` file
+
+Create a file named `docker-compose.yml` in that folder with this content:
+
+```yaml
+services:
+  postgres:
+    image: postgres:16
+    container_name: mini-payout-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: "${DB_PASSWORD}"
+      POSTGRES_DB: mini_payout_v2
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7
+    container_name: mini-payout-redis
+    ports:
+      - "6380:6379"
+
+  app:
+    image: tejas69/mini-payout-app:latest
+    container_name: mini-payout-app
+    ports:
+      - "5006:5005"
+    environment:
+      DATABASE_URL: "postgresql://postgres:${DB_PASSWORD}@postgres:5432/mini_payout_v2"
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      JWT_SECRET: "${JWT_SECRET}"
+      WEBHOOK_SECRET: "${WEBHOOK_SECRET}"
+      PORT: 5005
+    depends_on:
+      - postgres
+      - redis
+    command: sh -c "npx prisma migrate deploy && npx prisma db seed && node server.js"
+
+  worker:
+    image: tejas69/mini-payout-app:latest
+    container_name: mini-payout-worker
+    environment:
+      DATABASE_URL: "postgresql://postgres:${DB_PASSWORD}@postgres:5432/mini_payout_v2"
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ""
+    depends_on:
+      - postgres
+      - redis
+    command: node src/workers/payoutNotification.worker.js
+
+volumes:
+  postgres_data:
+```
+
+### Step 3 — Create a `.env` file
+
+Create a file named `.env` in the same folder with your own values:
+
+```
+DB_PASSWORD=choose_any_password
+JWT_SECRET=any_random_string_minimum_32_characters_long_abc123
+WEBHOOK_SECRET=any_random_string_minimum_32_characters_long_xyz456
+```
+
+> ⚠️ These are placeholder values — set anything you like. They just need to be consistent across the `.env` file and the running containers. Never use weak values like these in production.
+
+### Step 4 — Run
+
+```bash
+docker-compose up
+```
+
+Docker will automatically pull all images (your app from Docker Hub, official Postgres and Redis images). Wait about 60 seconds until you see:
+
+```
+mini-payout-app | Database connected
+mini-payout-app | Server running on http://localhost:5005
+mini-payout-worker | Payout notification worker started, waiting for jobs...
+```
+
+### Step 5 — Test
+
+Open the Swagger docs: **http://localhost:5006/api-docs**
+
+**Pre-seeded test accounts (ready to use immediately):**
+
+| Role | Email | Password |
+|---|---|---|
+| Admin | admin@test.com | admin1234 |
+| Merchant | merchant1@test.com | merchant1234 |
+| Merchant (funded) | neymar@test.com | neymar123 |
+
+> Neymar has a verified channel, funded wallet, and verified beneficiary — ready for payout testing immediately.
+
+### Stop
+
+```bash
+# Stop containers (data persists)
+docker-compose down
+
+# Stop and wipe all data
+docker-compose down -v
+```
+
+---
+
+## Local Development Setup
+
+For developers who want to run with live code changes.
+
+**Prerequisites:** Node.js 20+, PostgreSQL 16, Redis 7
 
 ```bash
 git clone https://github.com/TejasAnil4/mini-payout-v2.git
 cd mini-payout-v2
 npm install
-cp .env.example .env   # fill in DATABASE_URL, JWT_SECRET, WEBHOOK_SECRET, REDIS_HOST, REDIS_PORT
+cp .env.example .env        # fill in your local values
 npx prisma migrate dev
-npx prisma db seed      # optional — creates admin/merchant test accounts
-npm run dev              # starts the API on :5005
-npm run worker            # in a separate terminal — starts the BullMQ worker
+npx prisma db seed
+npm run dev                  # API on :5005
+npm run worker               # in a separate terminal
 ```
-
-### Docker Setup
-
-The fastest way to run the entire stack — API, worker, PostgreSQL, and Redis — with one command:
-
-```bash
-git clone https://github.com/TejasAnil4/mini-payout-v2.git
-cd mini-payout-v2
-cp .env.example .env   # fill in DB_PASSWORD, JWT_SECRET, WEBHOOK_SECRET
-docker-compose up
-```
-
-This builds the application image, provisions Postgres and Redis containers, runs migrations automatically, and starts both the API and the background worker — connected on a shared internal network.
 
 ---
 
 ## Environment Variables
 
-| Variable | Description |
-|---|---|
-| `DATABASE_URL` | PostgreSQL connection string |
-| `JWT_SECRET` | Secret for signing/verifying JWTs |
-| `WEBHOOK_SECRET` | Shared secret for HMAC webhook signature verification |
-| `REDIS_HOST` / `REDIS_PORT` | Redis connection details |
-| `REDIS_PASSWORD` | Redis auth password (required in managed environments, e.g. Railway) |
-| `PORT` | API server port (defaults to `5005`) |
+| Variable | Description | Required |
+|---|---|---|
+| `DATABASE_URL` | PostgreSQL connection string | ✅ |
+| `DB_PASSWORD` | Postgres container password (Docker only) | Docker only |
+| `JWT_SECRET` | Secret for signing JWTs (min 32 chars) | ✅ |
+| `WEBHOOK_SECRET` | Shared secret for HMAC webhook verification | ✅ |
+| `REDIS_HOST` | Redis hostname | ✅ |
+| `REDIS_PORT` | Redis port | ✅ |
+| `PORT` | API server port (default: 5005) | Optional |
 
 See `.env.example` for the full template.
 
@@ -235,13 +354,35 @@ See `.env.example` for the full template.
 
 ## API Documentation
 
-Interactive Swagger docs are available at `/api-docs` on any running instance:
+### REST — Swagger UI
 
-```
-http://localhost:5005/api-docs
+Interactive docs available at `/api-docs`:
+
+- **Live:** https://mini-payout-v2-production.up.railway.app/api-docs
+- **Local:** http://localhost:5006/api-docs
+
+Endpoints are grouped by resource (Auth, Wallet, Channel, TopUp, Beneficiary, Payout, Webhooks). Every endpoint shows request schema, response schema, and can be tested live.
+
+### GraphQL
+
+Available at `/graphql` alongside REST. Reuses the same service layer.
+
+```graphql
+# Get wallet balance
+{ myWallet { balance status } }
+
+# Get all payouts
+{ myTransactions(type: "PAYOUT") { referenceId amount status createdAt } }
+
+# Get both in one request
+{
+  myWallet { balance }
+  myTransactions(type: "PAYOUT") { referenceId amount }
+}
 ```
 
-A GraphQL endpoint is also available at `/graphql`, exposing read queries (e.g. `myWallet`, `myTransactions`) that reuse the same service layer as the REST API.
+**Endpoint:** `POST /graphql`
+**Auth:** `Authorization: Bearer <token>` header
 
 ---
 
@@ -251,29 +392,24 @@ A GraphQL endpoint is also available at `/graphql`, exposing read queries (e.g. 
 npm test
 ```
 
-Runs the Vitest + Supertest suite against an isolated `_test` database (configured via `.env.test`), completely separate from development data.
+Runs Vitest + Supertest integration tests against an isolated test database (`mini_payout_v2_test`). Configured via `.env.test` — completely separate from development data.
 
 ---
 
 ## Deployment
 
-Deployed on **Railway** as four independent services sharing a private network:
+Deployed on **Railway** as four independent services sharing a private internal network:
 
-- **API** — runs migrations on deploy, then starts the Express server
-- **Worker** — runs the BullMQ payout-notification processor
-- **PostgreSQL** — managed instance
-- **Redis** — managed instance, authenticated
+| Service | Role | Start Command |
+|---|---|---|
+| `mini-payout-v2` | Express API | `npx prisma migrate deploy && node server.js` |
+| `mini-payout-worker` | BullMQ worker | `node src/workers/payoutNotification.worker.js` |
+| `Postgres` | Managed database | — |
+| `Redis` | Managed cache + queue | — |
 
-The application image is also published to **Docker Hub**, so the full stack can be reproduced anywhere Docker is available via `docker-compose up`, without checking out the source.
+The application image is published to **Docker Hub** (`tejas69/mini-payout-app:latest`), making the full stack reproducible anywhere Docker is available via `docker-compose up`.
 
----
-
-## Roadmap
-
-- [ ] Expand GraphQL coverage beyond wallet/transaction queries
-- [ ] TypeScript migration
-- [ ] Additional integration test coverage (payout idempotency, concurrency conflict paths)
-- [ ] CI pipeline running tests on every push
+**Live URL:** https://mini-payout-v2-production.up.railway.app
 
 ---
 
